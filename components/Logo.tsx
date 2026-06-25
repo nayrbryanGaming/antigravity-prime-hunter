@@ -8,8 +8,6 @@ interface LogoProps {
 }
 
 export function Logo({ size = 36, animated = true }: LogoProps) {
-  const Wrap = animated ? motion.svg : "svg";
-
   return (
     <svg
       width={size}
