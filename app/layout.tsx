@@ -2,25 +2,29 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ANTIGRAVITY PRIME HUNTER — Guinness World Record Attempt",
+  title: "Antigravity Prime Hunter — Searching for the 52nd Mersenne Prime",
   description:
-    "24/7 autonomous Mersenne prime search engine. Lucas-Lehmer algorithm. " +
-    "Targeting the 52nd Mersenne prime, surpassing 2^136,279,841 - 1 (current world record, Oct 2024).",
-  keywords: ["prime numbers", "Mersenne prime", "Lucas-Lehmer", "world record", "GIMPS", "mathematics"],
+    "A Lucas-Lehmer search engine running 24 hours a day against Mersenne candidates " +
+    "above the current world record exponent of 136,279,841. Open-source, browser-native, no server required.",
+  keywords: [
+    "Mersenne prime",
+    "Lucas-Lehmer",
+    "prime number",
+    "world record",
+    "GIMPS",
+    "BigInt",
+    "mathematics",
+  ],
   openGraph: {
-    title: "ANTIGRAVITY PRIME HUNTER",
-    description: "Hunting the world's largest prime number 24/7",
+    title: "Antigravity Prime Hunter",
+    description: "Searching for the 52nd Mersenne prime, candidate by candidate.",
     type: "website",
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="id">
+    <html lang="en">
       <body>{children}</body>
     </html>
   );
