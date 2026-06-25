@@ -11,7 +11,7 @@
     "hunt:general": "node worker/prime-hunter.mjs --mode=general"
   },
   "dependencies": {
-    "next": "15.3.3",
+    "next": "latest",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
