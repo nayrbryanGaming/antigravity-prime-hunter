@@ -1,0 +1,8 @@
+{
+  "currentExponent": 136279843,
+  "testedCount": 0,
+  "foundPrimes": [],
+  "startedAt": "2026-06-25T00:00:00.000Z",
+  "lastUpdated": "2026-06-25T00:00:00.000Z",
+  "note": "Target: Find the 52nd Mersenne prime. Current record: 2^136279841 - 1 (Oct 2024)"
+}
