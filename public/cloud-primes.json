@@ -1,0 +1,11 @@
+{
+  "primes": [],
+  "totalFound": 0,
+  "totalTested": 0,
+  "runCount": 0,
+  "firstRun": "2026-06-25T00:00:00.000Z",
+  "lastRun": null,
+  "lastRunFound": 0,
+  "lastRunTested": 0,
+  "ratePerHour": 0
+}

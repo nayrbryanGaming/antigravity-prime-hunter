@@ -186,14 +186,23 @@ async function fastPrimeLoop() {
 
     if (isProbablePrime(candidate)) {
       state.fastFound++;
+      const fullDecimal = candidate.toString();
       const prime = {
-        type:     'fast',
+        type:        'fast',
         bits,
-        hex:      bigIntToHexPrefix(candidate, 20),
-        decimal:  candidate.toString().slice(0, 30) + '…',
-        fullHex:  candidate.toString(16),
-        foundAt:  new Date().toISOString(),
-        index:    state.fastFound,
+        hex:         bigIntToHexPrefix(candidate, 20),
+        decimal:     fullDecimal.slice(0, 30) + '…',
+        fullDecimal,                       // complete number — for independent verification
+        fullHex:     candidate.toString(16),
+        digits:      fullDecimal.length,
+        foundAt:     new Date().toISOString(),
+        index:       state.fastFound,
+        // Independent-verification recipe — any of these confirms primality:
+        verify: {
+          openssl:  'echo "' + fullDecimal + '" | openssl prime',
+          python:   'import sympy; sympy.isprime(' + fullDecimal + ')',
+          factordb: 'https://factordb.com/index.php?query=' + fullDecimal,
+        },
       };
       foundPrimes.push(prime);
       post('FOUND', prime);
