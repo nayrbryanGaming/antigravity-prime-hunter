@@ -3,6 +3,9 @@
   "outputDirectory": ".next",
   "framework": "nextjs",
   "regions": ["sin1"],
+  "crons": [
+    { "path": "/api/hunt", "schedule": "0 * * * *" }
+  ],
   "headers": [
     {
       "source": "/prime-worker.js",
