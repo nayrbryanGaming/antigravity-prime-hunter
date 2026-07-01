@@ -15,16 +15,19 @@
 
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
+import { put } from "@vercel/blob";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60; // seconds — Vercel Hobby ceiling
 
 // ── Config ────────────────────────────────────────────────────
-const OWNER = "nayrbryanGaming";
-const REPO  = "antigravity-prime-hunter";
-const PATH  = "public/cloud-primes.json";
-const HUNT_MS = 45_000;        // compute window, leaves room for GitHub round-trips
+// Vercel Blob store "prime-ledger" (public). Reads are token-free via this URL;
+// writes use BLOB_READ_WRITE_TOKEN, injected by Vercel when the store is connected.
+const BLOB_HOST = "yz44bxlsf8wvzj6q.public.blob.vercel-storage.com";
+const LEDGER_KEY = "cloud-primes.json";
+const LEDGER_URL = `https://${BLOB_HOST}/${LEDGER_KEY}`;
+const HUNT_MS = 45_000;        // compute window, leaves room for blob round-trips
 const TARGET_BITS = 1024;      // 309 digits — fast enough for many primes per run
 const MAX_STORED = 2000;
 
@@ -93,36 +96,33 @@ const EMPTY: Ledger = {
   lastRunFound: 0, lastRunTested: 0, ratePerHour: 0,
 };
 
-async function readLedger(token: string): Promise<{ ledger: Ledger; sha?: string }> {
-  const res = await fetch(
-    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`,
-    { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }, cache: "no-store" }
-  );
-  if (!res.ok) return { ledger: { ...EMPTY } };
-  const data = await res.json();
+// Read the running ledger from the public Blob URL (no token required).
+async function readLedger(): Promise<Ledger> {
   try {
-    const json = JSON.parse(Buffer.from(data.content, "base64").toString("utf-8"));
-    return { ledger: { ...EMPTY, ...json }, sha: data.sha };
+    const res = await fetch(`${LEDGER_URL}?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) return { ...EMPTY };
+    const json = await res.json();
+    return { ...EMPTY, ...json };
   } catch {
-    return { ledger: { ...EMPTY }, sha: data.sha };
+    return { ...EMPTY };
   }
 }
 
-async function writeLedger(token: string, ledger: Ledger, sha: string | undefined, found: number) {
-  const body = {
-    message: `bot: cloud hunt +${found} prime(s) ${new Date().toISOString()} [skip ci]`,
-    content: Buffer.from(JSON.stringify(ledger, null, 2)).toString("base64"),
-    ...(sha ? { sha } : {}),
-  };
-  const res = await fetch(
-    `https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`,
-    {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-      body: JSON.stringify(body),
-    }
-  );
-  return res.ok ? (await res.json()) : { error: await res.text() };
+// Write the ledger back to Blob. Uses BLOB_READ_WRITE_TOKEN from env.
+// Returns the blob URL on success, or an error string.
+async function writeLedger(ledger: Ledger): Promise<{ url?: string; error?: string }> {
+  try {
+    const result = await put(LEDGER_KEY, JSON.stringify(ledger, null, 2), {
+      access: "public",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "application/json",
+      cacheControlMaxAge: 0,
+    });
+    return { url: result.url };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 // ── Handler ───────────────────────────────────────────────────
@@ -138,9 +138,7 @@ async function handle(req: Request) {
     }
   }
 
-  const token = process.env.GH_TOKEN;
-
-  // Hunt loop
+  // Hunt loop — pure deterministic math (BPSW). No AI, no model, no network.
   let tested = 0;
   const newPrimes: Array<Record<string, unknown>> = [];
   while (Date.now() - t0 < HUNT_MS) {
@@ -160,41 +158,40 @@ async function handle(req: Request) {
     }
   }
 
-  // Persist to GitHub if we have a token
-  let committed = false;
-  let commitUrl: string | null = null;
-  if (token) {
-    const { ledger, sha } = await readLedger(token);
-    const merged: Ledger = {
-      primes: [...newPrimes, ...ledger.primes].slice(0, MAX_STORED),
-      totalFound: ledger.totalFound + newPrimes.length,
-      totalTested: ledger.totalTested + tested,
-      runCount: ledger.runCount + 1,
-      firstRun: ledger.firstRun ?? new Date().toISOString(),
-      lastRun: new Date().toISOString(),
-      lastRunFound: newPrimes.length,
-      lastRunTested: tested,
-      ratePerHour: Math.round(newPrimes.length / (HUNT_MS / 3_600_000)),
-    };
-    const result = await writeLedger(token, merged, sha, newPrimes.length);
-    committed = !result.error;
-    commitUrl = result?.commit?.html_url ?? null;
-  }
+  // Read current ledger (public blob, token-free), merge, write back to blob.
+  const prev = await readLedger();
+  const merged: Ledger = {
+    primes: [...newPrimes, ...prev.primes].slice(0, MAX_STORED),
+    totalFound: prev.totalFound + newPrimes.length,
+    totalTested: prev.totalTested + tested,
+    runCount: prev.runCount + 1,
+    firstRun: prev.firstRun ?? new Date().toISOString(),
+    lastRun: new Date().toISOString(),
+    lastRunFound: newPrimes.length,
+    lastRunTested: tested,
+    ratePerHour: Math.round(newPrimes.length / (HUNT_MS / 3_600_000)),
+  };
+
+  const write = await writeLedger(merged);
+  const persisted = !!write.url;
 
   return NextResponse.json({
     ok: true,
     server: "vercel",
     region: process.env.VERCEL_REGION ?? "unknown",
+    engine: "BPSW (deterministic math — no AI)",
     elapsedMs: Date.now() - t0,
     tested,
     found: newPrimes.length,
     bits: TARGET_BITS,
-    committed,
-    commitUrl,
+    persisted,
+    ledgerUrl: LEDGER_URL,
+    totalFoundAllTime: merged.totalFound,
+    writeError: write.error ?? null,
     sample: newPrimes.slice(0, 3).map(p => ({ digits: p.digits, head: (p.fullDecimal as string).slice(0, 40) + "…" })),
-    note: token
-      ? "Computed on Vercel servers and committed to GitHub."
-      : "Computed on Vercel servers. Set GH_TOKEN env var to persist results to GitHub.",
+    note: persisted
+      ? "Computed on Vercel servers and persisted to Vercel Blob (free, no AI)."
+      : "Computed on Vercel servers. Blob write pending store connection — see writeError.",
   });
 }
 
