@@ -15,21 +15,17 @@
 
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
-import { put } from "@vercel/blob";
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60; // seconds — Vercel Hobby ceiling
 
 // ── Config ────────────────────────────────────────────────────
-// Vercel Blob store "prime-ledger" (public). Reads are token-free via this URL;
-// writes use BLOB_READ_WRITE_TOKEN, injected by Vercel when the store is connected.
-const BLOB_HOST = "yz44bxlsf8wvzj6q.public.blob.vercel-storage.com";
-const LEDGER_KEY = "cloud-primes.json";
-const LEDGER_URL = `https://${BLOB_HOST}/${LEDGER_KEY}`;
-const HUNT_MS = 45_000;        // compute window, leaves room for blob round-trips
+// Persistence: Neon Postgres. DATABASE_URL is injected by the Neon/Vercel
+// integration — this function never handles the credential directly.
+const HUNT_MS = 40_000;        // compute window, leaves room for DB round-trips
 const TARGET_BITS = 1024;      // 309 digits — fast enough for many primes per run
-const MAX_STORED = 2000;
 
 // ── BPSW primality (trial division + 20-witness Miller-Rabin) ──
 function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
@@ -82,47 +78,46 @@ function randomOddBigInt(bits: number): bigint {
   return n;
 }
 
-// ── GitHub Contents API ───────────────────────────────────────
-interface Ledger {
-  primes: Array<Record<string, unknown>>;
-  totalFound: number; totalTested: number; runCount: number;
-  firstRun: string; lastRun: string | null;
-  lastRunFound: number; lastRunTested: number; ratePerHour: number;
-}
-
-const EMPTY: Ledger = {
-  primes: [], totalFound: 0, totalTested: 0, runCount: 0,
-  firstRun: new Date().toISOString(), lastRun: null,
-  lastRunFound: 0, lastRunTested: 0, ratePerHour: 0,
+// ── Neon Postgres persistence ─────────────────────────────────
+type Prime = {
+  bits: number; digits: number;
+  fullDecimal: string; fullHex: string;
+  foundAt: string;
 };
 
-// Read the running ledger from the public Blob URL (no token required).
-async function readLedger(): Promise<Ledger> {
-  try {
-    const res = await fetch(`${LEDGER_URL}?t=${Date.now()}`, { cache: "no-store" });
-    if (!res.ok) return { ...EMPTY };
-    const json = await res.json();
-    return { ...EMPTY, ...json };
-  } catch {
-    return { ...EMPTY };
-  }
+// Idempotent schema — safe to call every run.
+async function ensureSchema(sql: NeonQueryFunction<false, false>) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS primes (
+      id           BIGSERIAL PRIMARY KEY,
+      bits         INT NOT NULL,
+      digits       INT NOT NULL,
+      full_decimal TEXT NOT NULL,
+      full_hex     TEXT,
+      found_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      runner       TEXT DEFAULT 'vercel-cron'
+    )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS runs (
+      id      BIGSERIAL PRIMARY KEY,
+      tested  INT NOT NULL,
+      found   INT NOT NULL,
+      ran_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
 }
 
-// Write the ledger back to Blob. Uses BLOB_READ_WRITE_TOKEN from env.
-// Returns the blob URL on success, or an error string.
-async function writeLedger(ledger: Ledger): Promise<{ url?: string; error?: string }> {
-  try {
-    const result = await put(LEDGER_KEY, JSON.stringify(ledger, null, 2), {
-      access: "public",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: "application/json",
-      cacheControlMaxAge: 0,
-    });
-    return { url: result.url };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
+// Batch-insert found primes in a single round trip via unnest().
+async function insertPrimes(sql: NeonQueryFunction<false, false>, primes: Prime[]) {
+  if (primes.length === 0) return;
+  await sql`
+    INSERT INTO primes (bits, digits, full_decimal, full_hex, found_at)
+    SELECT * FROM unnest(
+      ${primes.map(p => p.bits)}::int[],
+      ${primes.map(p => p.digits)}::int[],
+      ${primes.map(p => p.fullDecimal)}::text[],
+      ${primes.map(p => p.fullHex)}::text[],
+      ${primes.map(p => p.foundAt)}::timestamptz[]
+    )`;
 }
 
 // ── Handler ───────────────────────────────────────────────────
@@ -140,7 +135,7 @@ async function handle(req: Request) {
 
   // Hunt loop — pure deterministic math (BPSW). No AI, no model, no network.
   let tested = 0;
-  const newPrimes: Array<Record<string, unknown>> = [];
+  const newPrimes: Prime[] = [];
   while (Date.now() - t0 < HUNT_MS) {
     const c = randomOddBigInt(TARGET_BITS);
     tested++;
@@ -149,49 +144,56 @@ async function handle(req: Request) {
       newPrimes.push({
         bits: TARGET_BITS,
         digits: full.length,
-        decimal: full.slice(0, 30) + "…",
         fullDecimal: full,
         fullHex: c.toString(16),
         foundAt: new Date().toISOString(),
-        runner: "vercel-cron",
       });
     }
   }
 
-  // Read current ledger (public blob, token-free), merge, write back to blob.
-  const prev = await readLedger();
-  const merged: Ledger = {
-    primes: [...newPrimes, ...prev.primes].slice(0, MAX_STORED),
-    totalFound: prev.totalFound + newPrimes.length,
-    totalTested: prev.totalTested + tested,
-    runCount: prev.runCount + 1,
-    firstRun: prev.firstRun ?? new Date().toISOString(),
-    lastRun: new Date().toISOString(),
-    lastRunFound: newPrimes.length,
-    lastRunTested: tested,
-    ratePerHour: Math.round(newPrimes.length / (HUNT_MS / 3_600_000)),
-  };
-
-  const write = await writeLedger(merged);
-  const persisted = !!write.url;
+  // Persist to Neon Postgres (DATABASE_URL injected by Vercel/Neon integration).
+  let persisted = false;
+  let writeError: string | null = null;
+  let totalFound = 0, totalTested = 0, runCount = 0;
+  try {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL not set");
+    const sql = neon(url);
+    await ensureSchema(sql);
+    await insertPrimes(sql, newPrimes);
+    await sql`INSERT INTO runs (tested, found) VALUES (${tested}, ${newPrimes.length})`;
+    const [agg] = await sql`
+      SELECT
+        (SELECT COUNT(*) FROM primes)          AS total_found,
+        (SELECT COALESCE(SUM(tested),0) FROM runs) AS total_tested,
+        (SELECT COUNT(*) FROM runs)            AS run_count`;
+    totalFound  = Number(agg.total_found);
+    totalTested = Number(agg.total_tested);
+    runCount    = Number(agg.run_count);
+    persisted = true;
+  } catch (e) {
+    writeError = e instanceof Error ? e.message : String(e);
+  }
 
   return NextResponse.json({
     ok: true,
     server: "vercel",
     region: process.env.VERCEL_REGION ?? "unknown",
     engine: "BPSW (deterministic math — no AI)",
+    store: "Neon Postgres",
     elapsedMs: Date.now() - t0,
     tested,
     found: newPrimes.length,
     bits: TARGET_BITS,
     persisted,
-    ledgerUrl: LEDGER_URL,
-    totalFoundAllTime: merged.totalFound,
-    writeError: write.error ?? null,
-    sample: newPrimes.slice(0, 3).map(p => ({ digits: p.digits, head: (p.fullDecimal as string).slice(0, 40) + "…" })),
+    totalFoundAllTime: totalFound,
+    totalTestedAllTime: totalTested,
+    runCount,
+    writeError,
+    sample: newPrimes.slice(0, 3).map(p => ({ digits: p.digits, head: p.fullDecimal.slice(0, 40) + "…" })),
     note: persisted
-      ? "Computed on Vercel servers and persisted to Vercel Blob (free, no AI)."
-      : "Computed on Vercel servers. Blob write pending store connection — see writeError.",
+      ? "Computed on Vercel servers and persisted to Neon Postgres (free, no AI)."
+      : "Computed on Vercel servers. DB write failed — see writeError.",
   });
 }
 

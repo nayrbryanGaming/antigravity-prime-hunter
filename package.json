@@ -11,6 +11,7 @@
     "hunt:general": "node worker/prime-hunter.mjs --mode=general"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@vercel/blob": "^2.5.0",
     "clsx": "^2.1.0",
     "framer-motion": "^11.0.0",

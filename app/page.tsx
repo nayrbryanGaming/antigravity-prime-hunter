@@ -327,16 +327,10 @@ export default function Page() {
     // 5. Send saved state so worker can resume — it auto-starts either way
     worker.postMessage({ type: "LOAD_STATE", state: savedState });
 
-    // 6. Poll the Vercel Blob ledger every 30s (server-computed primes).
-    //    Falls back to the static file until the blob store has data.
-    const BLOB_LEDGER = "https://yz44bxlsf8wvzj6q.public.blob.vercel-storage.com/cloud-primes.json";
+    // 6. Poll /api/ledger every 30s — server-computed primes stored in Neon Postgres.
     const fetchCloud = async () => {
       try {
-        const res = await fetch(`${BLOB_LEDGER}?t=${Date.now()}`, { cache: "no-store" });
-        if (res.ok) { setCloudData(await res.json()); return; }
-      } catch {}
-      try {
-        const res = await fetch(`/cloud-primes.json?t=${Date.now()}`);
+        const res = await fetch(`/api/ledger?t=${Date.now()}`, { cache: "no-store" });
         if (res.ok) setCloudData(await res.json());
       } catch {}
     };
@@ -748,7 +742,7 @@ export default function Page() {
                 <div>
                   <div className="text-sm font-semibold text-white">Vercel Cron runner (/api/hunt)</div>
                   <div className="text-xs text-zinc-500 mt-0.5">
-                    Daily schedule · BPSW pure math · 1024-bit · persists to Vercel Blob
+                    Daily schedule · BPSW pure math · 1024-bit · persists to Neon Postgres
                   </div>
                 </div>
                 <div className="flex items-center gap-2 text-xs">
@@ -806,9 +800,9 @@ export default function Page() {
                   {[
                     { icon:"01", text:"Vercel Cron triggers /api/hunt on a daily schedule (plain cron, no AI)" },
                     { icon:"02", text:"The function runs BPSW on Vercel's servers — no browser, no model" },
-                    { icon:"03", text:"Found primes are written to a public Vercel Blob ledger" },
-                    { icon:"04", text:"The blob is served free over Vercel's CDN, no credentials to read" },
-                    { icon:"05", text:"This page polls the ledger every 30 seconds to show new primes" },
+                    { icon:"03", text:"Found primes are written to a Neon Postgres database" },
+                    { icon:"04", text:"Each prime is a real row with its full value and a UTC timestamp" },
+                    { icon:"05", text:"This page polls /api/ledger every 30 seconds to show new primes" },
                   ].map(({ icon, text }) => (
                     <div key={icon} className="flex gap-3">
                       <span className="font-mono text-indigo-500 shrink-0">{icon}</span>
@@ -849,7 +843,7 @@ export default function Page() {
                       {fmt(cloudData.totalFound)} total
                     </span>
                   </div>
-                  <span className="text-[10px] text-zinc-600">Vercel Cron · even when offline</span>
+                  <span className="text-[10px] text-zinc-600">Neon Postgres · even when offline</span>
                 </div>
                 <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
                   {cloudData.primes.slice(0, 15).map((p, i) => (
