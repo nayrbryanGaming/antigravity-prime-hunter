@@ -327,8 +327,14 @@ export default function Page() {
     // 5. Send saved state so worker can resume — it auto-starts either way
     worker.postMessage({ type: "LOAD_STATE", state: savedState });
 
-    // 6. Poll cloud-primes.json every 30 seconds to show GitHub Actions results
+    // 6. Poll the Vercel Blob ledger every 30s (server-computed primes).
+    //    Falls back to the static file until the blob store has data.
+    const BLOB_LEDGER = "https://yz44bxlsf8wvzj6q.public.blob.vercel-storage.com/cloud-primes.json";
     const fetchCloud = async () => {
+      try {
+        const res = await fetch(`${BLOB_LEDGER}?t=${Date.now()}`, { cache: "no-store" });
+        if (res.ok) { setCloudData(await res.json()); return; }
+      } catch {}
       try {
         const res = await fetch(`/cloud-primes.json?t=${Date.now()}`);
         if (res.ok) setCloudData(await res.json());
@@ -720,16 +726,16 @@ export default function Page() {
           <motion.div initial="hidden" whileInView="show" viewport={{ once:true }} variants={stagger} className="mb-10">
             <motion.div variants={fadeUp}>
               <span className="badge badge-green mb-5">
-                <span className="status-dot w-1.5 h-1.5 bg-green-400" /> GitHub Actions · cloud server
+                <span className="status-dot w-1.5 h-1.5 bg-green-400" /> Vercel Cron · pure math · no AI
               </span>
             </motion.div>
             <motion.h2 variants={fadeUp} className="text-3xl md:text-4xl font-bold text-white mb-3">
               Running even when your laptop is off.
             </motion.h2>
             <motion.p variants={fadeUp} className="text-zinc-400 text-lg max-w-xl">
-              GitHub's servers run this hunt every 5 minutes, around the clock.
-              Your browser tab adds more, but the cloud never stops — power cut, laptop dead, browser closed.
-              It does not matter. The search keeps going.
+              A Vercel Cron job runs the search on Vercel&apos;s servers on a fixed daily schedule —
+              the same mechanism as a traditional server cron. No AI, no model: just the deterministic
+              BPSW primality test. Power cut, laptop dead, browser closed — the scheduled job still fires.
             </motion.p>
           </motion.div>
 
@@ -740,9 +746,9 @@ export default function Page() {
               style={{ border:"1px solid rgba(74,222,128,0.15)", background:"rgba(16,35,20,0.4)" } as React.CSSProperties}>
               <div className="flex items-center justify-between mb-5">
                 <div>
-                  <div className="text-sm font-semibold text-white">GitHub Actions cloud runner</div>
+                  <div className="text-sm font-semibold text-white">Vercel Cron runner (/api/hunt)</div>
                   <div className="text-xs text-zinc-500 mt-0.5">
-                    Scheduled every 5 minutes · BPSW · 2048-bit · runs 4.5 min per job
+                    Daily schedule · BPSW pure math · 1024-bit · persists to Vercel Blob
                   </div>
                 </div>
                 <div className="flex items-center gap-2 text-xs">
@@ -798,11 +804,11 @@ export default function Page() {
                 <div className="text-xs text-zinc-500 uppercase tracking-widest mb-4">How it works</div>
                 <div className="space-y-3 text-xs text-zinc-400">
                   {[
-                    { icon:"01", text:"GitHub Actions triggers every 5 minutes, 24/7" },
-                    { icon:"02", text:"Node.js runs BPSW on GitHub's Linux servers (no browser needed)" },
-                    { icon:"03", text:"Results committed to public/cloud-primes.json in the repo" },
-                    { icon:"04", text:"Vercel auto-deploys within 90 seconds" },
-                    { icon:"05", text:"This page polls every 30 seconds to show latest cloud primes" },
+                    { icon:"01", text:"Vercel Cron triggers /api/hunt on a daily schedule (plain cron, no AI)" },
+                    { icon:"02", text:"The function runs BPSW on Vercel's servers — no browser, no model" },
+                    { icon:"03", text:"Found primes are written to a public Vercel Blob ledger" },
+                    { icon:"04", text:"The blob is served free over Vercel's CDN, no credentials to read" },
+                    { icon:"05", text:"This page polls the ledger every 30 seconds to show new primes" },
                   ].map(({ icon, text }) => (
                     <div key={icon} className="flex gap-3">
                       <span className="font-mono text-indigo-500 shrink-0">{icon}</span>
@@ -843,7 +849,7 @@ export default function Page() {
                       {fmt(cloudData.totalFound)} total
                     </span>
                   </div>
-                  <span className="text-[10px] text-zinc-600">GitHub Actions · even when offline</span>
+                  <span className="text-[10px] text-zinc-600">Vercel Cron · even when offline</span>
                 </div>
                 <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
                   {cloudData.primes.slice(0, 15).map((p, i) => (
