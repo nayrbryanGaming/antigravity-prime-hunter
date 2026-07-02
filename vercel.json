@@ -4,7 +4,8 @@
   "framework": "nextjs",
   "regions": ["sin1"],
   "crons": [
-    { "path": "/api/hunt", "schedule": "0 0 * * *" }
+    { "path": "/api/hunt", "schedule": "0 0 * * *" },
+    { "path": "/api/hunt", "schedule": "0 12 * * *" }
   ],
   "headers": [
     {
